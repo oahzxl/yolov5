@@ -3,18 +3,20 @@ import datetime
 import logging
 import logging.handlers
 import os
+import shutil
 import sys
 import time
+
+import cv2
 import cx_Oracle
 import torch
 import yaml
 from tqdm import tqdm
-import shutil
 
 from models.experimental import attempt_load
-from utils.datasets import LoadImages
 from utils.datasets import create_dataloader
-from utils.general import check_img_size, non_max_suppression, set_logging, colorstr
+from utils.general import check_img_size, non_max_suppression, colorstr
+from utils.general import scale_coords, xyxy2xywh, clip_coords, xywh2xyxy
 from utils.torch_utils import select_device
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -67,76 +69,6 @@ def init_args():
     parser.add_argument('--delete', action='store_true', help='delete origin file')
     parser.add_argument('--single-cls', action='store_true', help='treat as single-class dataset')
     return parser.parse_args()
-
-
-def detect(opt):
-    source, weights, view_img, save_txt, imgsz = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
-    global SEL_NUM
-
-    # Initialize
-    set_logging()
-    device = select_device(opt.device)
-    half = device.type != 'cpu'  # half precision only supported on CUDA
-
-    # Load model
-    model = attempt_load(weights, map_location=device)  # load FP32 model
-    stride = int(model.stride.max())  # model stride
-    imgsz = check_img_size(imgsz, s=stride)  # check img_size
-    if half:
-        model.half()  # to FP16
-
-    # Second-stage classifier
-    # classify = False
-    # if classify:
-    #     modelc = mobilenetv3_large()
-    #     model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load(
-    #         "/home/pxjj/code/weights/MobileNetV3_Large_epoch_36_acc_0.8578125.tar")['model_state_dict'].items()})
-    #     model = model.cuda().eval()
-
-    # Set Dataloader
-    dataset = LoadImages(source, img_size=imgsz, stride=stride)
-
-    outputs = []
-    # Run inference
-    if device.type != 'cpu':
-        model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
-    for path, img, im0s, vid_cap in tqdm(dataset):
-        img = torch.from_numpy(img).to(device)
-        img = img.half() if half else img.float()  # uint8 to fp16/32
-        img /= 255.0  # 0 - 255 to 0.0 - 1.0
-        if img.ndimension() == 3:
-            img = img.unsqueeze(0)
-
-        SEL_NUM += 1
-
-        # Inference
-        pred = model(img, augment=opt.augment)[0]
-
-        # Apply NMS
-        pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
-
-        # Process detections
-        for i, det in enumerate(pred):  # detections per image
-            # p, s, im0, frame = path, '', im0s.copy(), getattr(dataset, 'frame', 0)
-            # from pathlib import Path
-            # p = Path(p)
-            # if 0:
-            #     for img in crop_img:
-            #         img = transforms.Compose([
-            #             transforms.Resize((224,224)),
-            #             transforms.ToTensor(),
-            #             transforms.Normalize([0.40565532,0.3918059,0.3886595],[0.22155257,0.21012186,0.2013864])
-            #         ])(img)
-            #         cls_res = modelc(img)
-            #         cls_res = nn.functional.softmax(cls_res, dim=-1)[1]
-            #         if cls_res > 0.5:
-            #             outputs.append(path)
-            #             break
-            # else:
-            if len(det):
-                outputs.append(path)
-
-    return outputs
 
 
 def test(data,
@@ -204,9 +136,37 @@ def test(data,
             out = non_max_suppression(out, conf_thres, iou_thres, labels=lb, multi_label=True, agnostic=False)
 
         # Statistics per image
-        for si, pred in enumerate(out):
-            if len(pred) > 0:
+        for si, det in enumerate(out):
+            if len(det) > 0:
                 outputs.append(paths[si])
+
+                # Write results
+                im0 = cv2.imread(paths[si])
+                im0 = cv2.resize(im0, (im0.shape[1] // 2, im0.shape[0] // 2))
+
+                det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
+                area = []
+                xyxys = []
+
+                for *xyxy, conf, cls in reversed(det):
+                    area.append(abs(xyxy[0] - xyxy[2]) * abs(xyxy[1] - xyxy[3]))
+                    xyxys.append(xyxy)
+
+                largest = torch.argmax(torch.tensor(area))
+                xyxy = xyxys[largest]
+
+                xyxy = torch.tensor(xyxy).view(-1, 4)
+                b = xyxy2xywh(xyxy)  # boxes
+                b[:, 2:] = b[:, 2:] * 1.02 + 10  # box wh * gain + pad
+                xyxy = xywh2xyxy(b).long()
+                clip_coords(xyxy, im0.shape)
+                crop = im0[int(xyxy[0, 1]):int(xyxy[0, 3]), int(xyxy[0, 0]):int(xyxy[0, 2])]
+                new_crop_size = (int(float(im0.shape[0]) / crop.shape[0] * crop.shape[1]), im0.shape[0])
+                crop = cv2.resize(crop, new_crop_size)
+
+                result = cv2.hconcat([im0, crop])
+                cv2.imwrite(paths[si], result)
+
     return outputs
 
 
@@ -324,7 +284,7 @@ def upload(result):
             sql = "insert into VIO_SURVEIL(XH,SBBH,CLFL,HPZL,HPHM,ZPSTR1,WFSJ,WFXW) values(surveil_sequence.NEXTVAL,:SBBH,:CLFL,:HPZL,:HPHM,:ZPSTR1,:WFSJ,:WFXW)"
             manyflag = True
             manytimes = 1
-            while (manyflag):
+            while manyflag:
                 try:
                     conn = cx_Oracle.connect("angyi_tpmspx", "angyi_tpmspx", "172.31.7.243:1521/pxtxzdb")
                     cursor = conn.cursor()
@@ -397,7 +357,7 @@ def upload(result):
         sql = "insert into VIO_SURVEIL(XH,SBBH,CLFL,HPZL,HPHM,ZPSTR1,WFSJ,WFXW) values(surveil_sequence.NEXTVAL,:SBBH,:CLFL,:HPZL,:HPHM,:ZPSTR1,:WFSJ,:WFXW)"
         manyflag2 = True
         manytimes2 = 1
-        while (manyflag2):
+        while manyflag2:
             try:
                 conn = cx_Oracle.connect("angyi_tpmspx", "angyi_tpmspx", "172.31.7.243:1521/pxtxzdb")
                 cursor = conn.cursor()

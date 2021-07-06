@@ -9,6 +9,7 @@ import cx_Oracle
 import torch
 import yaml
 from tqdm import tqdm
+import shutil
 
 from models.experimental import attempt_load
 from utils.datasets import LoadImages
@@ -20,19 +21,20 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 REC_NUM = 0
 SEL_NUM = 0
 SEND_NUM = 0
+FAIL_NUM = 0
 
 
 def init_logger():
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
     # 设置输出文件，时间间隔（s/S:秒 m/M分 h/H时 d/D天 minnight）,时间间隔数目，backupcount最大备份数目，默认为0不删除文件
-    allLogHandleTime = logging.handlers.TimedRotatingFileHandler(filename='/home/pxjj/log/debug/debug.log',
-                                                                 when='D', interval=1)
+    allLogHandleTime = logging.handlers.TimedRotatingFileHandler(filename='/home/pxjj/log/debug/debug.log', when='D',
+                                                                 interval=1)
     allLogHandleTime.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 
     # 设置输出文件，时间间隔（s/S:秒 m/M分 h/H时 d/D天 minnight）,时间间隔数目，backupcount最大备份数目，默认为0不删除文件
-    ErrorLogHandleTime = logging.handlers.TimedRotatingFileHandler(filename='/home/pxjj/log/error/error.log',
-                                                                   when='D', interval=1)
+    ErrorLogHandleTime = logging.handlers.TimedRotatingFileHandler(filename='/home/pxjj/log/error/error.log', when='D',
+                                                                   interval=1)
     # 设置文件输出格式
     ErrorLogHandleTime.setFormatter(
         logging.Formatter("%(asctime)s - %(levelname)s - %(filename)s[:%(lineno)d] - %(message)s"))
@@ -50,7 +52,7 @@ def init_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='weights/best.pt',
                         help='model.pt path(s)')
-    parser.add_argument('--source', type=str, default='/2021052114{jpg_bak',
+    parser.add_argument('--source', type=str, default='/collectdata/20210603{jpg',
                         help='source')  # file/folder, 0 for webcam
     parser.add_argument('--data', type=str, default='data/pxjj.yaml', help='*.data path')
     parser.add_argument('--batch-size', type=int, default=32, help='size of each image batch')
@@ -208,8 +210,34 @@ def test(data,
     return outputs
 
 
+def move_failed_upload(jpg_name):
+    t = datetime.datetime.now()
+    global FAIL_NUM
+    FAIL_NUM = len(jpg_name)
+
+    dir_name = '/' + str(t).split(':')[0].replace('-', '').replace(' ', '') + '{jpg'
+    if not os.path.exists(dir_name):
+        os.mkdir(dir_name)
+    for i in jpg_name:
+        try:
+            shutil.move(i, dir_name)
+        except:
+            continue
+
+    dir_name = dir_name.replace('jpg', 'txt')
+    if not os.path.exists(dir_name):
+        os.mkdir(dir_name)
+    for i in jpg_name:
+        i = i.replace('jpg', 'txt')
+        try:
+            shutil.move(i, dir_name)
+        except:
+            continue
+
+
 def upload(result):
     global SEND_NUM
+    failed_list = []
     uniview_list = ['KKBM', 'CPHM', 'CPLXBM', 'CPLXMC', 'CPYSMC',
                     'CLLXBM', 'TPZS', 'GCSJ']
     oracle_list = [
@@ -219,6 +247,7 @@ def upload(result):
         'JLLX', 'GXSJ', 'ZPSTR1', 'ZPSTR2', 'ZPSTR3', 'ZPSTR4', 'SCBJ', 'SCSJ', 'BZ', 'XZQH', 'SBBH']
 
     total_data = []
+    total_path = []
 
     for i in range(len(result)):
         try:
@@ -251,25 +280,30 @@ def upload(result):
         # print('uniview data:\n', uniview_data, '\n')
 
         oracle_data = {}
-        for j in range(len(oracle_list)):
-            oracle_data[oracle_list[j]] = None
+        # for j in range(len(oracle_list)):
+        #     oracle_data[oracle_list[j]] = None
         oracle_data['SBBH'] = uniview_data['KKBM']
         # oracle_data['ZQMJ'] = None
         oracle_data['CLFL'] = ''
         oracle_data['HPZL'] = uniview_data['CPLXBM'] if uniview_data['CPLXBM'] != 'null' else None
         oracle_data['HPHM'] = uniview_data['CPHM']
-        # oracle_data['XZQH'] = None
-        # oracle_data['SCZ'] = int(uniview_data['CS'])
-        # oracle_data['BZZ'] = int(uniview_data['CDXS'])
-        # oracle_data['ZPSTR1'] = None
         oracle_data['ZPSTR1'] = imgdata
-
         oracle_data['WFSJ'] = datetime.datetime.strptime(uniview_data['GCSJ'], "%Y-%m-%d %H:%M:%S")
+        oracle_data['WFXW'] = '1344:机动车违反禁令标志指示的'
         # oracle_data['WFXW'] = None
 
         # print('oracle data:\n', oracle_data, '\n')
 
         total_data.append(oracle_data.copy())
+        total_path.append(result[i])
+        # sql_data = {'SBBH' : oracle_data['SBBH'],
+        #             'CLFL' : oracle_data['CLFL'],
+        #             'HPZL' : oracle_data['HPZL'],
+        #             'HPHM' : oracle_data['HPHM'],
+        #             'ZPSTR1' : oracle_data['ZPSTR1'],
+        #             'WFSJ' : oracle_data['WFSJ']
+        # }
+        # total_data.append(sql_data.copy)
 
     if len(total_data):
         # total_data[0]['CLFL'] = 'imgdata'
@@ -279,61 +313,160 @@ def upload(result):
             keys = keys + ':' + k + ','
         SEND_NUM = len(total_data)
 
-        while len(total_data) > 800:
-            tmp_data = total_data[:800]
-            total_data = total_data[800:]
+        while len(total_data) > 50:
+            tmp_data = total_data[:50]
+            total_data = total_data[50:]
+            tmp_path = total_path[:50]
+            total_path = total_path[50:]
 
-            #  conn = cx_Oracle.connect("SYSTEM", "123456", "115.156.207.209:1521/orcl")
-            conn = cx_Oracle.connect("angyi_tpmspx", "angyi_tpmspx", "172.31.7.243:1521/pxtxzdb")
-            cursor = conn.cursor()
             # 执行SQL,创建一个表
-            sql = "insert into VIO_SURVEIL values(" + keys[:-1] + ")"
-            # print('sql:\n', sql)
+            # sql = "insert into VIO_SURVEIL values(" + keys[:-1] + ")"
+            sql = "insert into VIO_SURVEIL(XH,SBBH,CLFL,HPZL,HPHM,ZPSTR1,WFSJ,WFXW) values(surveil_sequence.NEXTVAL,:SBBH,:CLFL,:HPZL,:HPHM,:ZPSTR1,:WFSJ,:WFXW)"
+            manyflag = True
+            manytimes = 1
+            while (manyflag):
+                try:
+                    conn = cx_Oracle.connect("angyi_tpmspx", "angyi_tpmspx", "172.31.7.243:1521/pxtxzdb")
+                    cursor = conn.cursor()
+                    cursor.executemany(sql, tmp_data)
 
-            # cursor.execute(sql, oracle_data)
-            # total_data = total_data[:3]
+                    cursor.close()
+                    conn.commit()
+                    conn.close()
+                    manyflag = False
+                except Exception as e:
+                    try:
+                        cursor.close()
+                        conn.rollback()
+                        conn.close()
+                    except:
+                        pass
+                    if manytimes > 5:
+                        manyflag = False
+                        logger.error(e)
+                        logger.warning("EXCUTEMANY FAILED ! start insert one by one")
+                        for idx, data in enumerate(tmp_data):
+                            flag = True
+                            count = 1
+                            while flag:
+                                try:
+                                    singleconn = cx_Oracle.connect("angyi_tpmspx", "angyi_tpmspx",
+                                                                   "172.31.7.243:1521/pxtxzdb")
+                                    singlecursor = singleconn.cursor()
+                                    singlecursor.execute(sql, data)
 
-            cursor.executemany(sql, tmp_data, batcherrors=True)
+                                    singlecursor.close()
+                                    singleconn.commit()
+                                    singleconn.close()
+                                    flag = False
+                                except Exception as e1:
+                                    try:
+                                        singlecursor.close()
+                                        singleconn.rollback()
+                                        singleconn.close()
+                                    except:
+                                        pass
+                                    if 'ORA-03135' in str(e1):
+                                        logger.warning("insert one times:" + str(count))
+                                        if count > 6:
+                                            flag = False
+                                            logger.error(str(e1))
+                                        count = count + 1
+                                    else:
+                                        flag = False
+                                        SEND_NUM = SEND_NUM - 1
+                                        failed_list.append(tmp_path[idx])
+                                        logger.error(str(e1) + "....skip this data")
+                    else:
+                        logger.warning("INSERTMANY FALIED! insert times:" + str(manytimes))
+                        manytimes = manytimes + 1
+                # finally:
+                #     try:
+                #         if cursor is not None:
+                #             cursor.close()
+                #     except Exception as e:
+                #         logger.error("CLOSE CURSOR ERROR:"+str(e))
+                #     try:
+                #         if conn is not None:
+                #             conn.close()
+                #     except Exception as e:
+                #         logger.error("CLOSE CONN ERROR:"+str(e))
 
-            error_list = []
-            for error in cursor.getbatcherrors():
-                if 'ORA-03106' not in str(error.message):
-                    SEND_NUM -= 1
-                    logger.error("插入数据库错误 - " + str(error.message) + ' - 行数 - ' + str(error.offset))
-                    error_list.append(error.offset)
-            if len(error_list):
-                sorted(error_list, reverse=True)
-                for i in error_list:
-                    del (tmp_data[i])
-                cursor.executemany(sql, tmp_data)
-            cursor.close()
-            conn.commit()
-
-            # 关闭连接，释放资源
-            conn.close()
-
-        conn = cx_Oracle.connect("angyi_tpmspx", "angyi_tpmspx", "172.31.7.243:1521/pxtxzdb")
-        cursor = conn.cursor()
         # 执行SQL,创建一个表
-        sql = "insert into VIO_SURVEIL values(" + keys[:-1] + ")"
-        cursor.executemany(sql, total_data, batcherrors=True)
+        # sql = "insert into VIO_SURVEIL values(" + keys[:-1] + ")"
+        sql = "insert into VIO_SURVEIL(XH,SBBH,CLFL,HPZL,HPHM,ZPSTR1,WFSJ,WFXW) values(surveil_sequence.NEXTVAL,:SBBH,:CLFL,:HPZL,:HPHM,:ZPSTR1,:WFSJ,:WFXW)"
+        manyflag2 = True
+        manytimes2 = 1
+        while (manyflag2):
+            try:
+                conn = cx_Oracle.connect("angyi_tpmspx", "angyi_tpmspx", "172.31.7.243:1521/pxtxzdb")
+                cursor = conn.cursor()
+                cursor.executemany(sql, total_data)
 
-        error_list = []
-        for error in cursor.getbatcherrors():
-            if 'ORA-03106' not in str(error.message):
-                SEND_NUM -= 1
-                logger.error("插入数据库错误 - " + str(error.message) + ' - 行数 - ' + str(error.offset))
-                error_list.append(error.offset)
-        if len(error_list):
-            sorted(error_list, reverse=True)
-            for i in error_list:
-                del (total_data[i])
-            cursor.executemany(sql, total_data)
-        cursor.close()
-        conn.commit()
+                cursor.close()
+                conn.commit()
+                conn.close()
+                manyflag2 = False
+            except Exception as e:
+                try:
+                    cursor.close()
+                    conn.rollback()
+                    conn.close()
+                except:
+                    pass
+                if manytimes2 > 5:
+                    manyflag2 = False
+                    logger.error(e)
+                    logger.warning("EXCUTEMANY FAILED ! start insert one by one")
+                    for idx, data in enumerate(total_data):
+                        flag = True
+                        count = 1
+                        while flag:
+                            try:
+                                singleconn = cx_Oracle.connect("angyi_tpmspx", "angyi_tpmspx",
+                                                               "172.31.7.243:1521/pxtxzdb")
+                                singlecursor = singleconn.cursor()
+                                singlecursor.execute(sql, data)
 
-        # 关闭连接，释放资源
-        conn.close()
+                                singlecursor.close()
+                                singleconn.commit()
+                                singleconn.close()
+                                flag = False
+                            except Exception as e1:
+                                try:
+                                    singlecursor.close()
+                                    singleconn.rollback()
+                                    singleconn.close()
+                                except:
+                                    pass
+                                if 'ORA-03135' in str(e1):
+                                    singlecursor.close()
+                                    singlecursor.rollback()
+                                    logger.warning("insert one times:" + str(count))
+                                    if count > 6:
+                                        flag = False
+                                        logger.error(str(e1))
+                                    count = count + 1
+                                else:
+                                    flag = False
+                                    SEND_NUM = SEND_NUM - 1
+                                    failed_list.append(total_path[idx])
+                                    logger.error(str(e1) + "....skip this data")
+                else:
+                    logger.warning("INSERTMANYLAST FALIED! insert times:" + str(manytimes2))
+                    manytimes2 = manytimes2 + 1
+            # finally:
+            #     try:
+            #         if cursor is not None:
+            #             cursor.close()
+            #     except Exception as e:
+            #         logger.error("CLOSE CURSOR ERROR:"+str(e))
+            #     try:
+            #         if conn is not None:
+            #             conn.close()
+            #     except Exception as e:
+            #         logger.error("CLOSE CONN ERROR:"+str(e))
+    move_failed_upload(failed_list)
 
 
 def delete_unnecessary_files(opt):
@@ -346,7 +479,7 @@ def delete_unnecessary_files(opt):
             txt_file_name = os.path.join(source, file)
             try:
                 pic_txt = file[:-4].split('_')
-                if (pic_txt[-1] != "01" and pic_txt[-2] != "C") or not os.path.exists(
+                if (pic_txt[-7] != "01" and pic_txt[-2] != "C") or not os.path.exists(
                         txt_file_name.replace("txt", "jpg")):
                     os.remove(txt_file_name)
                     os.remove(txt_file_name.replace("txt", "jpg"))
@@ -401,9 +534,9 @@ if __name__ == '__main__':
         upload_time = time.time() - t0
         t0 = time.time()
         logger.info('Run Successfully - Processing Dir %s - Received Pictures %d - '
-                    'Selected Pictures %d - Detected Trucks %d - Inserted Trucks %d - '
+                    'Selected Pictures %d - Detected Trucks %d - Inserted Trucks %d - Failed Trucks %d - '
                     'Delete Time %ds - Python Time %ds - Upload Time %ds' %
-                    (arg.source[1:-4], REC_NUM, SEL_NUM, len(results), SEND_NUM,
+                    (arg.source[1:-4], REC_NUM, SEL_NUM, len(results), SEND_NUM, FAIL_NUM,
                      delete_time, python_time, upload_time))
     except Exception as e:
         logger.error('Upload Error - Processing Dir %s - Received Pictures %d - '

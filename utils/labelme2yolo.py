@@ -4,8 +4,8 @@ import cv2
 import math
 import tqdm
 
-img_folder_path = r'/home/zxl/repos/TruckDetection/data/yolov5/images/train'  # 图片存放文件夹
-folder_path = r"/home/zxl/repos/TruckDetection/data/yolov5/images/train"  # 标注数据的文件地址
+img_folder_path = r'/home/zxl/repos/TruckDetection/data/yolov5/打完标/val'  # 图片存放文件夹
+folder_path = r"/home/zxl/repos/TruckDetection/data/yolov5/打完标/val"  # 标注数据的文件地址
 txt_folder_path = r"/home/zxl/repos/TruckDetection/data/yolov5/l"  # 转换后的txt标签文件存放的文件夹
 
 
@@ -79,7 +79,7 @@ if __name__ == '__main__':
                 # img_name = json_d['imagePath'].split("\\")[-1].split(".")[0] + ".jpg"
                 img_name = jsonfile.replace("json", "jpg")
                 img_path = os.path.join(img_folder_path, img_name)
-                # relative_coordinate_txt(img_name, json_d, img_path)
-                absolute_coordinate_txt(img_name, json_d, img_path)
+                relative_coordinate_txt(img_name, json_d, img_path)
+                # absolute_coordinate_txt(img_name, json_d, img_path)
         except Exception as e:
             print(e, '\n', jsonfile_path)

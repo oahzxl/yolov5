@@ -9,8 +9,10 @@ import time
 
 import cv2
 import cx_Oracle
+import numpy as np
 import torch
 import yaml
+from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 
 from models.experimental import attempt_load
@@ -161,9 +163,24 @@ def test(data,
                 xyxy = xywh2xyxy(b).long()
                 clip_coords(xyxy, im0.shape)
                 crop = im0[int(xyxy[0, 1]):int(xyxy[0, 3]), int(xyxy[0, 0]):int(xyxy[0, 2])]
+
+                # add border
+                im0[-50:-25, :, :] = torch.zeros((50 - 25, im0.shape[1], im0.shape[2]))
+                # im0 = cv2.copyMakeBorder(im0, 32, 0, 0, 0, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+                im0 = cv2.cvtColor(im0, cv2.COLOR_BGR2RGB)
+                im0 = Image.fromarray(im0)
+
+                # PIL图片上打印汉字
+                draw = ImageDraw.Draw(im0)  # 图片上打印
+                font = ImageFont.truetype("/home/pxjj/code/simhei.ttf", 23, encoding="utf-8")  # 参数1：字体文件路径，参数2：字体大小
+                draw.text((1, im0.size[1] - 50 + 1), "违法代码:1344 违法行为:机动车违反禁令标志指示的",
+                          (255, 255, 255), font=font)  # 参数1：打印坐标，参数2：文本，参数3：字体颜色，参数4：字体
+
+                # PIL图片转cv2 图片
+                im0 = cv2.cvtColor(np.array(im0), cv2.COLOR_RGB2BGR)
+
                 new_crop_size = (int(float(im0.shape[0]) / crop.shape[0] * crop.shape[1]), im0.shape[0])
                 crop = cv2.resize(crop, new_crop_size)
-
                 result = cv2.hconcat([im0, crop])
                 cv2.imwrite(paths[si], result)
 
